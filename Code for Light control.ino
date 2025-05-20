@@ -1,0 +1,127 @@
+//MIT License
+
+Copyright (c) 2023 CurrentWizard
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+//
+
+
+
+#include <WiFi.h>
+#include <IOXhop_FirebaseESP32.h>
+
+// Firebase configuration
+#define FIREBASE_HOST "****************************************"
+#define FIREBASE_AUTH "****************************************"
+
+// WiFi credentials
+#define WIFI_SSID "********"
+#define WIFI_PASSWORD "********"
+
+// LED pin and PWM settings
+#define LED_PIN 4
+#define LEDC_CHANNEL 0
+#define LEDC_FREQ 5000
+#define LEDC_RESOLUTION 8
+#define ldr 33
+
+// Variables to store Firebase data
+String fireStatus = "";
+String firecont = "";
+String firepwm = "";
+
+// Variables for WiFi reconnection
+unsigned long previousMillis = 0;
+unsigned long interval = 30000; // 30 seconds interval for WiFi reconnection
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  pinMode(LED_PIN, OUTPUT);
+  
+  // Connect to WiFi
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("Connecting to ");
+  Serial.print(WIFI_SSID);
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(500);
+  }
+  Serial.println();
+  Serial.print("Connected to ");
+  Serial.println(WIFI_SSID);
+  Serial.print("IP Address is : ");
+  Serial.println(WiFi.localIP());
+
+  // Initialize Firebase
+  Firebase.begin(FIREBASE_HOST, FIREBASE_AUTH);
+  
+  // Set initial values in Firebase database
+  Firebase.setString("LED STATUS", "1"); // Default LED status is ON
+  Firebase.setString("Control", "2"); // Default control mode is manual
+
+  // Initialize PWM for controlling LED brightness
+  ledcSetup(LEDC_CHANNEL, LEDC_FREQ, LEDC_RESOLUTION);
+  ledcAttachPin(LED_PIN, LEDC_CHANNEL);
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+
+  // Check if the LED status is turned off
+  fireStatus = Firebase.getString("LED STATUS");
+  if (fireStatus == "0") {
+    Serial.println("Led Turned OFF");
+    ledcWrite(LEDC_CHANNEL, 0); // set LED brightness to minimum (OFF)
+    delay(1000);
+    return; // exit the loop
+  } 
+
+  // If WiFi is down, try reconnecting every CHECK_WIFI_TIME seconds
+  if ((WiFi.status() != WL_CONNECTED) && (currentMillis - previousMillis >= interval)) {
+    Serial.print(millis());
+    Serial.println("Reconnecting to WiFi...");
+    WiFi.disconnect();
+    WiFi.reconnect();
+    previousMillis = currentMillis;
+  }
+
+  // Read the LDR value and update the Firebase database
+  int ldr_value = analogRead(ldr);
+  Serial.println(ldr_value);
+  Firebase.setInt("ldr :", ldr_value);
+
+  // Read the Firebase database values
+  firepwm = Firebase.getString("PWM");
+  firecont = Firebase.getString("Control");
+
+  // Control the LED based on the Firebase database values
+  if (fireStatus == "1") {
+    if (firecont == "2") { // Manual mode
+      int pwm = firepwm.substring(1).toInt(); // Extract PWM value from Firebase string
+      ledcWrite(LEDC_CHANNEL, pwm); // Set LED brightness based on PWM value
+      Serial.println("Manual mode");
+    }
+    else if (firecont == "3") { // Automatic mode, use LDR as input
+      int pwm = map(ldr_value, 0, 4095, 0, 255); // Map LDR value to LED brightness range (0 to 255)
+      Serial.println("Automatic");
+      ledcWrite(LEDC_CHANNEL, pwm); // Set LED brightness based on mapped value from LDR
+    }
+  }
+}
